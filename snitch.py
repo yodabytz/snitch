@@ -42,11 +42,18 @@ def get_netblock_owner_email(ip_address):
     try:
         result = subprocess.run(["whois", ip_address], capture_output=True, text=True)
         output = result.stdout
-        match = re.search(r"(?i)abuse-mailbox:\s*(\S+)", output)
-        if match:
-            return match.group(1)
-        else:
-            return None
+
+        # Search for abuse-specific emails
+        abuse_email_match = re.search(r"(?i)(abuse-mailbox|abuse@|abuse_contact):\s*(\S+)", output)
+        if abuse_email_match:
+            return abuse_email_match.group(2)
+
+        # Fallback to any generic email found if no abuse-specific email is present
+        generic_email_match = re.search(r"(?i)(e-mail|email|contact):\s*(\S+@[\w.]+)", output)
+        if generic_email_match:
+            return generic_email_match.group(2)
+
+        return None
     except Exception as e:
         log_action(f"Error fetching netblock owner email for {ip_address}: {e}")
         return None
