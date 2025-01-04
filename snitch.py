@@ -3,6 +3,8 @@
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
 import os
 import time
 import re
@@ -49,16 +51,34 @@ def get_netblock_owner_email(ip_address):
         log_action(f"Error fetching netblock owner email for {ip_address}: {e}")
         return None
 
-def send_email(subject, body, recipient_email):
+def send_email_with_attachment(subject, body, recipient_email, attachment_path):
     try:
+        if not recipient_email:
+            log_action("Error: No recipient email provided, skipping email send.")
+            return
+
         # Create email message
         msg = MIMEMultipart()
         msg['From'] = EMAIL_ADDRESS
         msg['To'] = recipient_email
         msg['Subject'] = subject
 
-        # Attach the body
+        # Add body text
         msg.attach(MIMEText(body, 'plain'))
+
+        # Attach the log file
+        if os.path.exists(attachment_path):
+            with open(attachment_path, 'rb') as attachment:
+                part = MIMEBase('application', 'octet-stream')
+                part.set_payload(attachment.read())
+            encoders.encode_base64(part)
+            part.add_header(
+                'Content-Disposition',
+                f'attachment; filename={os.path.basename(attachment_path)}',
+            )
+            msg.attach(part)
+        else:
+            log_action(f"Attachment file not found: {attachment_path}")
 
         # Set up the server
         server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
@@ -69,7 +89,7 @@ def send_email(subject, body, recipient_email):
         server.send_message(msg)
         server.quit()
 
-        log_action(f"Email sent to {recipient_email} with subject: {subject}")
+        log_action(f"Email sent to {recipient_email} with subject: {subject} and attachment: {attachment_path}")
     except Exception as e:
         log_action(f"Failed to send email to {recipient_email}: {e}")
 
@@ -105,10 +125,10 @@ def monitor_fail2ban_logs():
                 if any(ignored_message in line for ignored_message in IGNORED_MESSAGES):
                     continue
 
-                # Check for ban events in the log line
-                match = re.search(r"Ban\s+(\d+\.\d+\.\d+\.\d+)\s+in\s+jail\s+([\w-]+)", line)
+                # Updated regex to match "[jail_name] Ban IP"
+                match = re.search(r"\[(\w+)\]\s+Ban\s+(\d+\.\d+\.\d+\.\d+)", line)
                 if match:
-                    ip_address, jail_name = match.groups()
+                    jail_name, ip_address = match.groups()
                     log_action(f"Ban detected for IP: {ip_address} in jail: {jail_name}")
 
                     # Verify if the jail is configured
@@ -118,10 +138,10 @@ def monitor_fail2ban_logs():
 
                     # Fetch netblock owner email or use test email if set
                     netblock_email = get_netblock_owner_email(ip_address)
-                    recipient_email = TEST_EMAIL or netblock_email
+                    recipient_email = TEST_EMAIL if TEST_EMAIL else netblock_email
 
                     if not recipient_email:
-                        log_action(f"No email found for IP: {ip_address}")
+                        log_action(f"No abuse email found for IP: {ip_address}, skipping email.")
                         continue
 
                     # Extract log entries for the banned IP
@@ -129,6 +149,11 @@ def monitor_fail2ban_logs():
                     if not log_entries:
                         log_action(f"No log entries found for IP: {ip_address} in jail: {jail_name}")
                         continue
+
+                    # Write log entries to a temporary file
+                    temp_log_path = f"/tmp/snitch_{ip_address}_{jail_name}.log"
+                    with open(temp_log_path, 'w') as temp_log_file:
+                        temp_log_file.write(log_entries)
 
                     # Include netblock admin email in test mode
                     body_extra = f"\nNetblock admin email: {netblock_email}" if TEST_EMAIL else ""
@@ -140,13 +165,15 @@ def monitor_fail2ban_logs():
                         f"We have detected potentially malicious activity originating from IP address {ip_address}. "
                         f"This IP address has been blocked by our system due to abusive behavior, which may indicate that the server "
                         f"associated with this IP is compromised or being used as a proxy for unauthorized actions.\n\n"
-                        f"Below are the relevant log entries from the {jail_name} jail ({JAIL_LOG_FILES[jail_name]}):\n\n"
-                        f"{log_entries}\n\n"
-                        f"We recommend investigating this matter promptly to ensure the security of your systems and network.\n\n"
+                        f"A detailed log of the detected activity is attached to this email. Please review the attachment to identify "
+                        f"the nature of the activity and take appropriate action to secure your systems.\n\n"
                         f"{body_extra}"
                         f"\n\nRegards,\nSecurity Team"
                     )
-                    send_email(subject, body, recipient_email)
+                    send_email_with_attachment(subject, body, recipient_email, temp_log_path)
+
+                    # Clean up temporary file
+                    os.remove(temp_log_path)
     except FileNotFoundError:
         log_action(f"Fail2Ban log file not found: {FAIL2BAN_LOG}")
     except Exception as e:
