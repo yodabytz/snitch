@@ -22,7 +22,7 @@ CHECK_INTERVAL = 60 # Check fail2ban log every 60 seconds
 TEST_EMAIL = None # Set to an email address for testing, or None for normal behavior
 IGNORED_MESSAGES = ["Restore Ban"] # Messages to ignore
 
-# Whitelist configuration
+# Whitelist configuration (Fail2ban will still block these)
 WHITELIST = {
     "Censys": ["162.142.125.0/24", "167.94.138.0/24", "167.94.145.0/24", "167.94.146.0/24", "167.248.133.0/24"],
     "Example": ["203.0.113.1", "203.0.113.2"]
